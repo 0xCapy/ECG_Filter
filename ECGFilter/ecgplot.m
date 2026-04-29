@@ -1,9 +1,5 @@
 classdef ecgplot
-    %ECGPLOT Plotting file for the ECG report.
-    %
-    % Most of my figure tweaking is kept in style() at the bottom.  That makes
-    % it less painful to adjust fonts/margins without chasing ten separate plots.
-    % The layout is meant to look report-like, not like default MATLAB output.
+
 
     methods (Static)
 
@@ -205,12 +201,7 @@ classdef ecgplot
 
 
         function fig = dftAnnotated(noisySig, fs, cutoffHz, ~)
-            %DFTANNOTATED DFT plot with the bits I need to discuss in the report.
-            %
-            % Notes from tuning:
-            % - 60 Hz is marked with a small filled down-triangle;
-            % - fc is drawn manually because MATLAB's default dash spacing was ugly;
-            % - the HF shaded band follows the visible cluster in ECGData1.
+
 
             st = ecgplot.style();
             [f, P1] = ecgplot.singleSidedSpectrum(noisySig, fs);
