@@ -1,0 +1,190 @@
+%% main.m
+% I kept the order close to the brief so each saved figure is easy to match
+% Dataset here is ECGData1 (PVC case).
+% Main route: 45 Hz LPF for the required FIR/IIR comparison, then a separate
+% notch + zero-phase IIR check for the cleaner PQRST view.
+
+clear; clc; close all;
+
+%% ---------------- Configuration 
+rootDir = fileparts(mfilename('fullpath'));
+
+cfg = struct();
+cfg.datasetName = 'ECGData1';
+cfg.patientNote = '69-year-old male with premature ventricular contraction (PVC)';
+cfg.fs = 360;                         % sample rate from the brief / Hz
+cfg.dataFile = fullfile(rootDir, 'ECGData1.mat');
+cfg.cutoffHz = 45;                    % chosen LP cutoff; 40 was a bit too tight
+cfg.cutoffCyclesPerSample = cfg.cutoffHz / cfg.fs;
+cfg.cutoffNyquistNormalised = cfg.cutoffHz / (cfg.fs / 2);  % MATLAB Wn
+cfg.filterOrder = 5;                  % coursework cap is N <= 5
+
+% Extra improvement settings.
+% My idea here is not just 'increase the order': remove the narrow 60 Hz
+% line first, then allow a wider LPF so the P/T parts are not flattened too
+% much.  filtfilt is only used for this offline/report comparison.
+cfg.notchFreqHz = 60;
+cfg.notchBandwidthHz = 2;
+cfg.improvedCutoffHz = 80;
+cfg.improvedCutoffCyclesPerSample = cfg.improvedCutoffHz / cfg.fs;
+cfg.improvedCutoffNyquistNormalised = cfg.improvedCutoffHz / (cfg.fs / 2);
+cfg.highFreqNoiseBandHz = [117, 142];
+
+cfg.resultDir = fullfile(rootDir, 'results');
+cfg.figureDir = fullfile(cfg.resultDir, 'figures');
+
+if ~exist(cfg.resultDir, 'dir')
+    mkdir(cfg.resultDir);
+end
+
+if ~exist(cfg.figureDir, 'dir')
+    mkdir(cfg.figureDir);
+end
+
+% Clean up the old IIR sweep outputs from earlier testing.
+staleFiles = { ...
+    fullfile(cfg.resultDir, 'IIR_Order_Sweep.csv'), ...
+    fullfile(cfg.figureDir, 'Fig10_IIR_Order_Sweep_Key_Metrics.png'), ...
+    fullfile(cfg.figureDir, 'Fig10_IIR_Order_Sweep_Key_Metrics.pdf') ...
+};
+for kStale = 1:numel(staleFiles)
+    if isfile(staleFiles{kStale})
+        delete(staleFiles{kStale});
+    end
+end
+
+% I clear CSVs first so the results folder does not mix old runs with this one.
+oldCsv = dir(fullfile(cfg.resultDir, '*.csv'));
+for kCsv = 1:numel(oldCsv)
+    delete(fullfile(oldCsv(kCsv).folder, oldCsv(kCsv).name));
+end
+
+%% -------------Load ECGData1 ----------------
+D = ecgtool.loadData(cfg.dataFile, cfg.fs);
+
+fprintf('\n=== ECGData1 DSP Coursework: Step 1-11 ===\n');
+fprintf('Dataset                 : %s\n', cfg.datasetName);
+fprintf('Patient note            : %s\n', cfg.patientNote);
+fprintf('Number of samples       : %d\n', D.N);
+fprintf('Duration                : %.2f s\n', D.durationSec);
+fprintf('Sampling frequency      : %.1f Hz\n', cfg.fs);
+fprintf('Signal unit             : mV\n\n');
+
+%% -----------Plot origSig and noisySig -------------
+fig1 = ecgplot.timeDomain(D.t, D.origSig, D.noisySig, cfg);
+ecgplot.saveFigure(fig1, fullfile(cfg.figureDir, 'Fig1'));
+
+zoomRange = [5.0, 7.0];   % seconds for local time-domain view
+fig2 = ecgplot.timeDomainZoom(D.t, D.origSig, D.noisySig, zoomRange, cfg);
+ecgplot.saveFigure(fig2, fullfile(cfg.figureDir, 'Fig2'));
+
+%% ---------Estimate heart rate ----------------
+HR = ecgtool.estimateHeartRate(D.origSig, cfg.fs);
+
+fprintf('Detected R-peaks         : %d\n', numel(HR.locs));
+fprintf('Heart rate               : %.1f bpm\n', HR.bpmCount);
+
+if ~isnan(HR.bpmRR)
+    fprintf('Mean RR heart rate       : %.1f bpm\n', HR.bpmRR);
+end
+
+fig3 = ecgplot.rPeakDetection(D.t, D.origSig, HR, cfg);
+ecgplot.saveFigure(fig3, fullfile(cfg.figureDir, 'Fig3'));
+
+%% --------Annotate DFT and select cutoff -----------
+fig4 = ecgplot.dftAnnotated(D.noisySig, cfg.fs, cfg.cutoffHz, cfg);
+ecgplot.saveFigure(fig4, fullfile(cfg.figureDir, 'Fig4'));
+
+fprintf('Chosen cutoff            : %.1f Hz\n', cfg.cutoffHz);
+fprintf('Normalised cutoff        : %.4f cycles/sample\n', cfg.cutoffCyclesPerSample);
+fprintf('MATLAB normalised cutoff : %.4f of Nyquist\n\n', cfg.cutoffNyquistNormalised);
+
+%% ---------Design FIR and IIR filters ----------------
+F = ecgtool.designFilters(cfg.fs, cfg.cutoffHz, cfg.filterOrder, cfg.notchFreqHz, cfg.notchBandwidthHz, cfg.improvedCutoffHz);
+
+fprintf('FIR filter order         : %d\n', F.fir.order);
+fprintf('IIR filter order         : %d\n', F.iir.order);
+fprintf('Design cutoff Wn         : %.4f\n\n', F.Wn);
+
+
+%% ---Plot filter magnitude responses ----------------
+fig5 = ecgplot.filterResponses(F, cfg);
+ecgplot.saveFigure(fig5, fullfile(cfg.figureDir, 'Fig5'));
+
+%% ---------Apply FIR and IIR filters ----------------
+Y = ecgtool.applyFilters(D.noisySig, F);
+
+%% ---------------- Quantitative performance metrics ------
+metricsTable = ecgtool.performanceMetrics(D.origSig, D.noisySig, Y, cfg.fs, HR, cfg.highFreqNoiseBandHz);
+writetable(metricsTable, fullfile(cfg.resultDir, 'metrics.csv'));
+
+disp('Filter performance metrics:');
+disp(metricsTable);
+
+%% -------------Compare filtered signals with original ECG ----------------
+fig6 = ecgplot.filteredComparison(D.t, D.origSig, D.noisySig, Y, cfg);
+ecgplot.saveFigure(fig6, fullfile(cfg.figureDir, 'Fig6'));
+
+zoomRangeFiltered = [3.5, 4.5];   % seconds for detailed filtered comparison
+fig7 = ecgplot.filteredComparisonZoom(D.t, D.origSig, D.noisySig, Y, zoomRangeFiltered, cfg);
+ecgplot.saveFigure(fig7, fullfile(cfg.figureDir, 'Fig7'));
+
+%% --------Frequency-domain comparison after filtering -------------
+fig8 = ecgplot.filteredSpectrumComparison(D.noisySig, Y, cfg.fs, cfg.cutoffHz, cfg);
+ecgplot.saveFigure(fig8, fullfile(cfg.figureDir, 'Fig8'));
+
+%% -----------Improved design comparison --------------
+improvementZoomRange = [3.5, 4.5];
+fig9 = ecgplot.improvementComparison(D.t, D.origSig, D.noisySig, Y, improvementZoomRange, cfg);
+ecgplot.saveFigure(fig9, fullfile(cfg.figureDir, 'Fig9'));
+
+%% ---------------- Extra: Bar-chart comparison of key metrics -------------
+fig10 = ecgplot.performanceMetricsBars(metricsTable);
+ecgplot.saveFigure(fig10, fullfile(cfg.figureDir, 'Fig10'));
+
+
+%% ---------------- Save concise report summary ----------------
+summaryTable = table( ...
+    {cfg.datasetName}, ...
+    {cfg.patientNote}, ...
+    D.N, ...
+    D.durationSec, ...
+    cfg.fs, ...
+    numel(HR.locs), ...
+    HR.bpmCount, ...
+    cfg.cutoffHz, ...
+    cfg.cutoffCyclesPerSample, ...
+    cfg.cutoffNyquistNormalised, ...
+    cfg.filterOrder, ...
+    {'Hamming window'}, ...
+    {'Butterworth'}, ...
+    cfg.notchFreqHz, ...
+    cfg.notchBandwidthHz, ...
+    cfg.improvedCutoffHz, ...
+    {sprintf('%.0f-%.0f', cfg.highFreqNoiseBandHz(1), cfg.highFreqNoiseBandHz(2))}, ...
+    'VariableNames', { ...
+        'Dataset', ...
+        'Patient', ...
+        'Samples', ...
+        'Duration_s', ...
+        'Fs_Hz', ...
+        'R_peaks', ...
+        'HR_bpm', ...
+        'LP_fc_Hz', ...
+        'LP_fc_cycles_per_sample', ...
+        'LP_fc_Wn', ...
+        'Order', ...
+        'FIR_design', ...
+        'IIR_design', ...
+        'Notch_Hz', ...
+        'Notch_BW_Hz', ...
+        'Improved_LP_Hz', ...
+        'HF_band_Hz' ...
+    } ...
+);
+
+writetable(summaryTable, fullfile(cfg.resultDir, 'summary.csv'));
+
+fprintf('\nStep 1-11 completed.\n');
+fprintf('Figures saved to: %s\n', cfg.figureDir);
+fprintf('Tables saved to : %s\n\n', cfg.resultDir);

@@ -1,0 +1,2 @@
+Dataset,Patient,Samples,Duration_s,Fs_Hz,R_peaks,HR_bpm,LP_fc_Hz,LP_fc_cycles_per_sample,LP_fc_Wn,Order,FIR_design,IIR_design,Notch_Hz,Notch_BW_Hz,Improved_LP_Hz,HF_band_Hz
+ECGData1,69-year-old male with premature ventricular contraction (PVC),3600,10,360,12,72,45,0.125,0.25,5,Hamming window,Butterworth,60,2,80,117-142
